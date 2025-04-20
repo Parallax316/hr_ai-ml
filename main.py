@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from threading import Thread
 import pandas as pd
 import matplotlib.pyplot as plt
-from typing import List, Dict, Any # For type hinting
+from typing import List, Dict, Any, Callable # For type hinting
 
 # --- LLM & RAG Imports ---
 from llama_cpp import Llama
@@ -54,7 +54,6 @@ try:
         context_precision,
         answer_correctness,
     )
-    # --- REMOVED explicit wrapper imports ---
     from datasets import Dataset
     RAGAS_INSTALLED = True
 except ImportError as e:
@@ -63,8 +62,6 @@ except ImportError as e:
     ragas = None
     Dataset = None
     evaluate = None
-    # LangchainLLM = None # No longer needed
-    # LangchainEmbeddings = None # No longer needed
     faithfulness, answer_relevancy, context_recall, context_precision, answer_correctness = [None]*5
 
 
@@ -94,6 +91,45 @@ CROSS_ENCODER_MODEL = 'cross-encoder/ms-marco-MiniLM-L-6-v2'
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY") # Get key from environment
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1" # Default OpenRouter URL
 RAGAS_EVAL_LLM_MODEL = "openai/gpt-4o-mini" # OpenRouter model identifier
+
+
+# --- Start: Analysis & Dashboard Imports (Strict) ---
+
+# Initialize function variables globally
+run_attrition_analysis: Callable | None = None
+run_clustering_analysis: Callable | None = None
+generate_basic_dashboard: Callable | None = None
+generate_extended_dashboard: Callable | None = None
+
+# Attempt to import the actual functions
+try:
+    from attrition_analysis import run_attrition_analysis as real_attrition
+    run_attrition_analysis = real_attrition # Assign if successful
+    logger.info("Successfully imported run_attrition_analysis.")
+
+    from clustering_analysis import run_clustering_analysis as real_clustering
+    run_clustering_analysis = real_clustering # Assign if successful
+    logger.info("Successfully imported run_clustering_analysis.")
+
+    from hr_dashboard import generate_basic_dashboard as real_basic_dash
+    generate_basic_dashboard = real_basic_dash # Assign if successful
+    logger.info("Successfully imported generate_basic_dashboard.")
+
+    from hr_dashboard_extended import generate_extended_dashboard as real_extended_dash
+    generate_extended_dashboard = real_extended_dash # Assign if successful
+    logger.info("Successfully imported generate_extended_dashboard.")
+
+except ImportError as e:
+    logger.error(f"CRITICAL: Failed to import one or more analysis/dashboard functions: {e}. "
+                 f"The /analyze and /dashboard endpoints will likely fail. "
+                 f"Ensure attrition_analysis.py, clustering_analysis.py, hr_dashboard.py, "
+                 f"and hr_dashboard_extended.py exist and contain the required functions.")
+except Exception as e:
+    logger.error(f"CRITICAL: An unexpected error occurred during analysis/dashboard function imports: {e}. "
+                 f"The /analyze and /dashboard endpoints may fail.", exc_info=True)
+
+# --- End: Analysis & Dashboard Imports ---
+
 
 # --- Global Resources ---
 logger.info("Loading LOCAL LLM model for RAG...")
@@ -329,31 +365,45 @@ async def upload_data_csv(file: UploadFile = File(...)):
 
 @app.post("/analyze")
 async def run_analysis():
-    # (Implementation as before - calls store_analysis_results which uses k=10)
     global app_state
     logger.info("Received request to run analysis.")
     if app_state is None or not app_state.get("data_file_info"): raise HTTPException(status_code=400, detail="No data file uploaded.")
     data_info = app_state["data_file_info"]; data_path = data_info.get("path"); data_filename = data_info.get("filename", "Unknown file")
     if not data_path or not os.path.exists(data_path): raise HTTPException(status_code=404, detail=f"Data file '{data_filename}' not found.")
+
+    # --- Start: Check if analysis functions were imported ---
+    if run_attrition_analysis is None or run_clustering_analysis is None:
+        logger.error("Analysis functions (attrition/clustering) were not imported successfully. Cannot run analysis.")
+        raise HTTPException(status_code=501, detail="Analysis functions not available due to import errors.")
+    # --- End: Check ---
+
     data_info["analysis_status"] = "running"; app_state["analysis_retriever"] = None
     logger.info(f"Starting data analysis for: {data_filename}...")
     analysis_docs = []; results_summary = {}
     try:
-        logger.info("Running attrition analysis..."); attrition_results = run_attrition_analysis(data_path)
+        # Call Analysis Functions (Now checked for existence)
+        logger.info("Running attrition analysis...")
+        attrition_results = run_attrition_analysis(data_path)
         results_summary['attrition'] = attrition_results.get('summary', 'Error/No Summary')
         if findings := attrition_results.get("key_findings", []):
              for finding in findings: analysis_docs.append(Document(page_content=finding, metadata={"source": "attrition_analysis"}))
-        logger.info("Running clustering analysis..."); clustering_results = run_clustering_analysis(data_path)
+
+        logger.info("Running clustering analysis...")
+        clustering_results = run_clustering_analysis(data_path)
         results_summary['clustering'] = clustering_results.get('summary', 'Error/No Summary')
         if clusters := clustering_results.get("clusters", []):
              for i, desc in enumerate(clusters): analysis_docs.append(Document(page_content=desc, metadata={"source": "clustering_analysis", "cluster_id": i}))
+
         if not analysis_docs: logger.warning("No analysis results generated.")
         logger.info("Storing analysis results..."); success_storing = store_analysis_results(analysis_docs, ANALYSIS_COLLECTION_NAME) # Uses k=10
         if success_storing:
             data_info["analysis_status"] = "completed"; logger.info("Analysis completed and results stored.")
             return JSONResponse(content={ "message": "Analysis completed.", "status": "completed", "summary": results_summary })
         else: data_info["analysis_status"] = "error_storing"; raise HTTPException(status_code=500, detail="Failed to store analysis results.")
-    except Exception as e: logger.error(f"Error during analysis: {e}", exc_info=True); data_info["analysis_status"] = "error_running"; raise HTTPException(status_code=500, detail=f"Analysis error: {e}")
+    except Exception as e: # Catch errors during function execution
+        logger.error(f"Error during analysis execution: {e}", exc_info=True)
+        data_info["analysis_status"] = "error_running"
+        raise HTTPException(status_code=500, detail=f"Analysis execution error: {e}")
 
 
 @app.post("/chat/policy")
@@ -408,7 +458,6 @@ async def evaluate_rag_endpoint():
     if not embeddings: raise HTTPException(status_code=503, detail="Embeddings not loaded for Ragas.")
     if not LANGCHAIN_OPENAI_INSTALLED or not ChatOpenAI: raise HTTPException(status_code=501, detail="langchain-openai not installed.")
     if not OPENROUTER_API_KEY: raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not set.")
-    # --- REMOVED check for LangchainLLM/LangchainEmbeddings ---
 
     logger.info(f"Starting RAG evaluation with {len(eval_dataset_dict['question'])} questions...")
     policy_retriever = app_state["policy_retriever"]
@@ -417,7 +466,6 @@ async def evaluate_rag_endpoint():
     results_for_eval = []
     for i, question in enumerate(eval_dataset_dict['question']):
         logger.info(f"Generating answer for eval question {i+1}...")
-        # generate_rag_answer uses the local llm_model for the actual answer generation
         rag_output = generate_rag_answer(question, policy_retriever, policy_system_prompt)
         eval_item = { "question": question, "answer": rag_output.get("answer", "[Error]"), "contexts": rag_output.get("contexts", []), "ground_truth": eval_dataset_dict['ground_truth'][i] }
         results_for_eval.append(eval_item)
@@ -441,12 +489,9 @@ async def evaluate_rag_endpoint():
             openai_api_base=OPENROUTER_BASE_URL,
             temperature=0.0
         )
-        # Check if the global embeddings object is available
-        if not embeddings:
-             raise HTTPException(status_code=500, detail="Local embeddings object not available for Ragas.")
+        if not embeddings: raise HTTPException(status_code=500, detail="Local embeddings object not available for Ragas.")
 
         logger.info("Passing raw LangChain objects (ChatOpenAI client, OllamaEmbeddings) to Ragas evaluate.")
-        # Call evaluate, passing the raw LangChain client objects directly
         result_scores = evaluate(
             hf_dataset,
             metrics=active_metrics,
@@ -457,7 +502,19 @@ async def evaluate_rag_endpoint():
 
         logger.info("Ragas evaluation completed.")
         logger.info(f"Evaluation Scores: {result_scores}")
-        scores_dict = dict(result_scores) # Convert Ragas result to plain dict
+        # --- Start: FIX for KeyError: 0 ---
+        # Convert Ragas result (often a Dataset object or dict-like) to a plain dictionary
+        if hasattr(result_scores, 'items'):
+             scores_dict = dict(result_scores.items())
+        elif isinstance(result_scores, dict):
+             scores_dict = result_scores
+        else:
+             try: # Attempt conversion if it behaves like a Hugging Face Dataset row/dict
+                 scores_dict = result_scores.to_dict()
+             except AttributeError:
+                 logger.warning("Could not convert Ragas result to dict directly. Returning raw object representation.")
+                 scores_dict = {"ragas_result": str(result_scores)} # Fallback
+        # --- End: FIX for KeyError: 0 ---
         return JSONResponse(content=scores_dict)
 
     except Exception as e:
@@ -481,11 +538,18 @@ async def get_basic_dashboard():
     if app_state is None or not app_state.get("data_file_info"): raise HTTPException(status_code=400, detail="No data.")
     data_info = app_state["data_file_info"]; data_path = data_info.get("path")
     if not data_path or not os.path.exists(data_path): raise HTTPException(status_code=404, detail="Data file not found.")
+
+    # --- Start: Check if dashboard function was imported ---
+    if generate_basic_dashboard is None:
+        logger.error("generate_basic_dashboard function not imported successfully.")
+        raise HTTPException(status_code=501, detail="Basic dashboard function not available due to import error.")
+    # --- End: Check ---
+
     logger.info(f"Generating basic dashboard...")
     fig = None
     try:
-        fig = generate_basic_dashboard(data_path)
-        if not fig: raise HTTPException(status_code=500, detail="Failed to generate.")
+        fig = generate_basic_dashboard(data_path) # Uses globally defined function (checked above)
+        if not fig: raise HTTPException(status_code=500, detail="Failed to generate basic dashboard.")
         buf = io.BytesIO(); fig.savefig(buf, format='png', dpi=150, bbox_inches='tight'); plt.close(fig); buf.seek(0)
         return StreamingResponse(buf, media_type="image/png")
     except Exception as e: logger.error(f"Dashboard error: {e}", exc_info=True); raise HTTPException(status_code=500, detail=f"{e}")
@@ -496,11 +560,18 @@ async def get_extended_dashboard():
     if app_state is None or not app_state.get("data_file_info"): raise HTTPException(status_code=400, detail="No data.")
     data_info = app_state["data_file_info"]; data_path = data_info.get("path")
     if not data_path or not os.path.exists(data_path): raise HTTPException(status_code=404, detail="Data file not found.")
+
+    # --- Start: Check if dashboard function was imported ---
+    if generate_extended_dashboard is None:
+        logger.error("generate_extended_dashboard function not imported successfully.")
+        raise HTTPException(status_code=501, detail="Extended dashboard function not available due to import error.")
+    # --- End: Check ---
+
     logger.info(f"Generating extended dashboard...")
     fig = None
     try:
-        fig = generate_extended_dashboard(data_path)
-        if not fig: raise HTTPException(status_code=500, detail="Failed to generate.")
+        fig = generate_extended_dashboard(data_path) # Uses globally defined function (checked above)
+        if not fig: raise HTTPException(status_code=500, detail="Failed to generate extended dashboard.")
         buf = io.BytesIO(); fig.savefig(buf, format='png', dpi=150, bbox_inches='tight'); plt.close(fig); buf.seek(0)
         return StreamingResponse(buf, media_type="image/png")
     except Exception as e: logger.error(f"Dashboard error: {e}", exc_info=True); raise HTTPException(status_code=500, detail=f"{e}")
@@ -512,7 +583,13 @@ def health_check():
     if not embeddings: health_status["embedding_status"] = "error: not initialized"
     if SENTENCE_TRANSFORMERS_INSTALLED and not cross_encoder: health_status["cross_encoder_status"] = "error: not loaded"
     if not RAGAS_INSTALLED: health_status["ragas_status"] = "error: not installed"
-    # Ragas config check is now effectively done within the endpoint
+    # Check analysis/dashboard import status
+    analysis_imports_ok = all([run_attrition_analysis, run_clustering_analysis])
+    dashboard_imports_ok = all([generate_basic_dashboard, generate_extended_dashboard])
+    if not analysis_imports_ok: health_status["analysis_scripts"] = "error: import failed"
+    if not dashboard_imports_ok: health_status["dashboard_scripts"] = "error: import failed"
+    if analysis_imports_ok and dashboard_imports_ok: health_status["external_scripts"] = "ok (imports attempted)"
+
     health_status["ragas_config"] = "local_to_endpoint"
     return JSONResponse(content=health_status)
 
