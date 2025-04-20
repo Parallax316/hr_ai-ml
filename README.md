@@ -1,5 +1,8 @@
 # HR AI Assistant with RAG and Data Analysis
 
+## Download link for my fine-tuned llm - 
+  https://drive.google.com/file/d/1Oj1G34m9aylIrjor3gEM2rRUl2fvo3U5/view?usp=sharing
+
 ## Overview
 
 This project implements an interactive AI Assistant designed for Human Resources (HR) representatives. It features a FastAPI backend providing API endpoints and a React frontend for the user interface. The assistant leverages Large Language Models (LLMs) – specifically a **custom microsoft phi-4 mini instruct model fine-tuned by the project author on HR Q&A data using PEFT/LoRA techniques and converted to GGUF f16 format** – combined with Retrieval-Augmented Generation (RAG) and Cross-Encoder Re-ranking to provide context-aware assistance based on company documents and dynamic employee data analysis.
@@ -155,4 +158,5 @@ Manual testing with specific queries against the Re-ranking RAG configuration re
 * **Configuration File:** Move settings like `MODEL_PATH`, collection names, `OPENROUTER_API_KEY` etc., from `main.py` to a `.env` file or `config.yaml`.
 * **UI Enhancements:** Display RAG evaluation results, allow configuration changes via UI.
 * **Agentic Behavior:** Explore LangChain agents for more complex workflows.
+
 
