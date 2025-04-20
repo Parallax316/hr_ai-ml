@@ -160,3 +160,5 @@ Manual testing with specific queries against the Re-ranking RAG configuration re
 * **Agentic Behavior:** Explore LangChain agents for more complex workflows.
 
 
+## Project Author - 
+Simarpreet Singh
