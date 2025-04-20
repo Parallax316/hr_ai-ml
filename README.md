@@ -162,3 +162,16 @@ Manual testing with specific queries against the Re-ranking RAG configuration re
 
 ## Project Author - 
 Simarpreet Singh
+
+## Screenshots - 
+
+![{23D5311E-3EC0-4BA4-995D-05007A9A0C5B}](https://github.com/user-attachments/assets/66f200e0-e6d6-48ea-8bdf-582ab74fb373)
+
+![{B587E897-4CC4-4990-956E-98F3A63C64EB}](https://github.com/user-attachments/assets/1bd279bf-5966-4f44-a459-99fa47f5eb67)
+
+![{B18E5809-C239-4C84-938D-B3B16E2D9975}](https://github.com/user-attachments/assets/2fdc8398-9e86-4c86-a967-742fb0ad28f2)
+
+![{AD659E2A-F9AA-4378-8B03-74FEB56F56D6}](https://github.com/user-attachments/assets/264abe55-de1c-40ca-bd53-f79e1758b4cf)
+
+
+
